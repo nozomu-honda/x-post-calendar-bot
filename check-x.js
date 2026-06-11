@@ -80,10 +80,10 @@ async function main() {
     for (let i = 0; i < Math.min(articles.length, 10); i++) {
       const article = articles[i];
 
-      const text = await article.innerText().catch(() => '');
-      if (!text) continue;
+      const listText = await article.innerText().catch(() => '');
+      if (!listText) continue;
 
-      const matchedKeywords = KEYWORDS.filter(keyword => text.includes(keyword));
+      const matchedKeywords = KEYWORDS.filter(keyword => listText.includes(keyword));
       if (matchedKeywords.length === 0) continue;
 
       const postUrl = await extractPostUrl(article);
@@ -91,46 +91,46 @@ async function main() {
       console.log('--- keyword matched post ---');
       console.log(`keywords: ${matchedKeywords.join(', ')}`);
       console.log(`link: ${postUrl || target.url}`);
-      console.log(text.slice(0, 1200));
+      console.log(listText.slice(0, 1200));
 
       const fullText = postUrl
         ? await fetchFullPostText(browser, postUrl)
-  : '';
+        : '';
 
-        const aiText = fullText && fullText.length > text.length
+      const aiText = fullText && fullText.length > listText.length
         ? fullText
-        : text;
+        : listText;
 
-        console.log('--- full post text used for AI ---');
-        console.log(aiText.slice(0, 2000));
+      console.log('--- full post text used for AI ---');
+      console.log(aiText.slice(0, 2500));
 
-        const ai = await analyzePostWithAI({
-  account: target.account,
-  postUrl: postUrl || target.url,
-  text: aiText,
-  matchedKeywords,
-});
+      const ai = await analyzePostWithAI({
+        account: target.account,
+        postUrl: postUrl || target.url,
+        text: aiText,
+        matchedKeywords,
+      });
 
-const fixedAi = fixAiByPeriodText(ai, aiText);
+      const fixedAi = fixAiByPeriodText(ai, aiText);
 
-console.log('--- AI result ---');
-console.log(JSON.stringify(fixedAi, null, 2));
+      console.log('--- AI result ---');
+      console.log(JSON.stringify(fixedAi, null, 2));
 
-if (!fixedAi.should_create) {
-  console.log('AI judged: skip');
-  continue;
-}
+      if (!fixedAi.should_create) {
+        console.log('AI judged: skip');
+        continue;
+      }
 
-const payload = {
-  source: 'x-playwright-ai',
-  account: target.account,
-  title: fixedAi.calendar_title || makeTitle(text),
-  link: postUrl || target.url,
-  pubDate: new Date().toISOString(),
-  description: aiText,
-  matchedKeywords,
-  ai: fixedAi,
-};
+      const payload = {
+        source: 'x-playwright-ai',
+        account: target.account,
+        title: fixedAi.calendar_title || makeTitle(listText),
+        link: postUrl || target.url,
+        pubDate: new Date().toISOString(),
+        description: aiText,
+        matchedKeywords,
+        ai: fixedAi,
+      };
 
       const postRes = await fetch(GAS_WEB_APP_URL, {
         method: 'POST',
@@ -150,6 +150,43 @@ const payload = {
   await browser.close();
 }
 
+async function fetchFullPostText(browser, postUrl) {
+  if (!postUrl) return '';
+
+  const page = await browser.newPage({
+    viewport: {
+      width: 1280,
+      height: 1000,
+    },
+    userAgent:
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  });
+
+  try {
+    await page.goto(postUrl, {
+      waitUntil: 'domcontentloaded',
+      timeout: 60000,
+    });
+
+    await page.waitForTimeout(6000);
+
+    const articles = await page.locator('article').all();
+
+    if (articles.length === 0) {
+      const bodyText = await page.locator('body').innerText().catch(() => '');
+      return bodyText;
+    }
+
+    const text = await articles[0].innerText().catch(() => '');
+    return text;
+  } catch (e) {
+    console.log(`fetchFullPostText error: ${e.message}`);
+    return '';
+  } finally {
+    await page.close();
+  }
+}
+
 async function analyzePostWithAI({ account, postUrl, text, matchedKeywords }) {
   const todayJst = new Intl.DateTimeFormat('sv-SE', {
     timeZone: 'Asia/Tokyo',
@@ -165,7 +202,7 @@ async function analyzePostWithAI({ account, postUrl, text, matchedKeywords }) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'gpt-4.1-mini',
+      model: 'gpt-4.1-nano',
       input: [
         {
           role: 'system',
@@ -185,18 +222,19 @@ async function analyzePostWithAI({ account, postUrl, text, matchedKeywords }) {
             text,
             '',
             '判断ルール:',
-'- 申込期限、受付期限、応募締切、販売終了、抽選締切が明確なら date_type は deadline。',
-'- 「受付期間」「応募期間」「申込期間」「販売期間」が A〜B の形で書かれている場合、calendar_date は必ず終了日Bにしてください。',
-'- 受付期間の終了日が分かる場合、date_type は必ず deadline にしてください。',
-'- 受付開始日と受付終了日が両方ある場合、開始日ではなく終了日を優先してください。',
-'- 例: 「受付期間：6/6(土)18:00〜6/15(月)23:59」なら calendar_date は 2026-06-15、date_type は deadline。',
-'- 締切・受付終了・期間終了が明確な場合、needs_manual_check は false にしてください。',
-'- 受付開始、先行開始、販売開始、スタートが明確なら date_type は application_start。ただし受付期間の終了日がある場合は deadline を優先。',
-'- サイン会、チェキ会、撮影会、お渡し会、特典会などの開催日時しか分からない場合は date_type は event_date ではなく manual_check を優先してよい。',
-'- 公演日やツアー初日だけを、申込期限として扱ってはいけません。',
-'- 締切日が本文に見えないが申込/受付開始だけ分かる場合は、calendar_date は開始日、needs_manual_check は true。',
-'- 日付が本文から判断できない場合は、calendar_date は今日の日付、date_type は manual_check、needs_manual_check は true。',
-'- PinnedやShow moreなどのUI文字は無視してください。',
+            '- 申込期限、受付期限、応募締切、販売終了、抽選締切が明確なら date_type は deadline。',
+            '- 「受付期間」「応募期間」「申込期間」「販売期間」が A〜B の形で書かれている場合、calendar_date は必ず終了日Bにしてください。',
+            '- 「受付期間」「応募期間」「申込期間」「販売期間」が A〜B の形で書かれている場合、period_start はA、period_end はBにしてください。',
+            '- 受付期間の終了日が分かる場合、date_type は必ず deadline にしてください。',
+            '- 受付開始日と受付終了日が両方ある場合、開始日ではなく終了日を優先してください。',
+            '- 例: 「受付期間：6/6(土)18:00〜6/15(月)23:59」なら period_start は 2026-06-06、period_end は 2026-06-15、calendar_date は 2026-06-15、date_type は deadline。',
+            '- 締切・受付終了・期間終了が明確な場合、needs_manual_check は false にしてください。',
+            '- 受付開始、先行開始、販売開始、スタートが明確なら date_type は application_start。ただし受付期間の終了日がある場合は deadline を優先。',
+            '- サイン会、チェキ会、撮影会、お渡し会、特典会などの開催日時しか分からない場合は date_type は event_date ではなく manual_check を優先してよい。',
+            '- 公演日やツアー初日だけを、申込期限として扱ってはいけません。',
+            '- 締切日が本文に見えないが申込/受付開始だけ分かる場合は、calendar_date は開始日、needs_manual_check は true。',
+            '- 日付が本文から判断できない場合は、calendar_date は今日の日付、date_type は manual_check、needs_manual_check は true。',
+            '- PinnedやShow moreなどのUI文字は無視してください。',
           ].join('\n'),
         },
       ],
@@ -236,6 +274,14 @@ async function analyzePostWithAI({ account, postUrl, text, matchedKeywords }) {
                 type: 'string',
                 description: 'YYYY-MM-DD形式。判断不能なら今日の日付。',
               },
+              period_start: {
+                type: 'string',
+                description: '受付期間・申込期間・販売期間の開始日。YYYY-MM-DD形式。不明なら空文字。',
+              },
+              period_end: {
+                type: 'string',
+                description: '受付期間・申込期間・販売期間の終了日。YYYY-MM-DD形式。不明なら空文字。',
+              },
               date_type: {
                 type: 'string',
                 enum: [
@@ -269,6 +315,8 @@ async function analyzePostWithAI({ account, postUrl, text, matchedKeywords }) {
               'category',
               'calendar_title',
               'calendar_date',
+              'period_start',
+              'period_end',
               'date_type',
               'needs_manual_check',
               'summary',
@@ -302,6 +350,66 @@ async function analyzePostWithAI({ account, postUrl, text, matchedKeywords }) {
   return JSON.parse(outputText);
 }
 
+function fixAiByPeriodText(ai, text) {
+  const fixed = { ...ai };
+
+  const periodMatch = text.match(
+    /(受付期間|応募期間|申込期間|販売期間)[：:\s]*.*?(\d{1,2})[\/月](\d{1,2})日?.*?[〜~～\-ー].*?(\d{1,2})[\/月](\d{1,2})日?/s
+  );
+
+  if (!periodMatch) {
+    if (!fixed.period_start) fixed.period_start = '';
+    if (!fixed.period_end) fixed.period_end = '';
+    return fixed;
+  }
+
+  const startMonth = Number(periodMatch[2]);
+  const startDay = Number(periodMatch[3]);
+  const endMonth = Number(periodMatch[4]);
+  const endDay = Number(periodMatch[5]);
+
+  const todayJst = new Date(
+    new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' })
+  );
+
+  let year = todayJst.getFullYear();
+
+  const oneMonthAgo = new Date(todayJst);
+  oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+
+  const endCandidate = new Date(year, endMonth - 1, endDay);
+
+  if (endCandidate < oneMonthAgo) {
+    year += 1;
+  }
+
+  const startDate = toYmd(year, startMonth, startDay);
+  const endDate = toYmd(year, endMonth, endDay);
+
+  fixed.period_start = startDate;
+  fixed.period_end = endDate;
+
+  fixed.calendar_date = endDate;
+  fixed.date_type = 'deadline';
+  fixed.needs_manual_check = false;
+
+  if (!fixed.calendar_title.includes('期限') && !fixed.calendar_title.includes('締切')) {
+    fixed.calendar_title = `${fixed.calendar_title} 受付期限`;
+  }
+
+  fixed.reason = `${periodMatch[1]}の開始日と終了日が明記されているため。`;
+
+  return fixed;
+}
+
+function toYmd(year, month, day) {
+  return [
+    String(year),
+    String(month).padStart(2, '0'),
+    String(day).padStart(2, '0'),
+  ].join('-');
+}
+
 async function extractPostUrl(article) {
   const links = await article
     .locator('a')
@@ -332,85 +440,3 @@ main().catch(error => {
   console.error(error);
   process.exit(1);
 });
-
-async function fetchFullPostText(browser, postUrl) {
-  if (!postUrl) return '';
-
-  const page = await browser.newPage({
-    viewport: {
-      width: 1280,
-      height: 1000,
-    },
-    userAgent:
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-  });
-
-  try {
-    await page.goto(postUrl, {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000,
-    });
-
-    await page.waitForTimeout(6000);
-
-    const articles = await page.locator('article').all();
-
-    if (articles.length === 0) {
-      const bodyText = await page.locator('body').innerText().catch(() => '');
-      return bodyText;
-    }
-
-    const text = await articles[0].innerText().catch(() => '');
-    return text;
-  } catch (e) {
-    console.log(`fetchFullPostText error: ${e.message}`);
-    return '';
-  } finally {
-    await page.close();
-  }
-}
-
-function fixAiByPeriodText(ai, text) {
-  const fixed = { ...ai };
-
-  const periodMatch = text.match(
-    /(受付期間|応募期間|申込期間|販売期間)[：:\s]*.*?(\d{1,2})[\/月](\d{1,2})日?.*?[〜~～\-ー].*?(\d{1,2})[\/月](\d{1,2})日?/s
-  );
-
-  if (!periodMatch) {
-    return fixed;
-  }
-
-  const endMonth = Number(periodMatch[4]);
-  const endDay = Number(periodMatch[5]);
-
-  const todayJst = new Date(
-    new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' })
-  );
-
-  let year = todayJst.getFullYear();
-  const candidate = new Date(year, endMonth - 1, endDay);
-
-  const oneMonthAgo = new Date(todayJst);
-  oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
-
-  if (candidate < oneMonthAgo) {
-    year += 1;
-  }
-
-  const yyyy = String(year);
-  const mm = String(endMonth).padStart(2, '0');
-  const dd = String(endDay).padStart(2, '0');
-
-  fixed.calendar_date = `${yyyy}-${mm}-${dd}`;
-  fixed.date_type = 'deadline';
-  fixed.needs_manual_check = false;
-
-  if (!fixed.calendar_title.includes('期限') && !fixed.calendar_title.includes('締切')) {
-    fixed.calendar_title = `${fixed.calendar_title} 受付期限`;
-  }
-
-  fixed.reason = `${periodMatch[1]}の終了日が明記されているため。`;
-
-  return fixed;
-}

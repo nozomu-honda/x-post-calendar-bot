@@ -1,6 +1,8 @@
 name: Check X with Playwright
 
 on:
+  schedule:
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 jobs:
