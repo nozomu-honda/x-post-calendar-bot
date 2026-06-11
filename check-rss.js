@@ -1,114 +1,41 @@
 const RSS_URLS = [
-  {
-    account: 'CANDY_TUNE_',
-    url: 'https://nitter.net/CANDY_TUNE_/rss',
-  },
-];
-
-const GAS_WEB_APP_URL = process.env.GAS_WEB_APP_URL;
-
-const KEYWORDS = [
-  '申込',
-  '申し込み',
-  '受付',
-  '応募',
-  '抽選',
-  '先行',
-  '締切',
-  '期限',
-  'チケット',
-  '販売',
-  'リセール',
-  '特典会',
-  '整理券',
+  'https://nitter.net/CANDY_TUNE_/rss',
+  'https://nitter.poast.org/CANDY_TUNE_/rss',
+  'https://nitter.privacydev.net/CANDY_TUNE_/rss',
+  'https://nitter.tiekoetter.com/CANDY_TUNE_/rss',
+  'https://rsshub.app/twitter/user/CANDY_TUNE_',
+  'https://openrss.org/twitter.com/CANDY_TUNE_',
+  'https://openrss.org/x.com/CANDY_TUNE_',
 ];
 
 async function main() {
-  if (!GAS_WEB_APP_URL) {
-    throw new Error('GAS_WEB_APP_URL is not set');
-  }
+  for (const url of RSS_URLS) {
+    console.log('==============================');
+    console.log(`URL: ${url}`);
 
-  for (const target of RSS_URLS) {
-    console.log(`Checking: ${target.account} / ${target.url}`);
-
-    const res = await fetch(target.url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0',
-        'Accept': 'application/rss+xml, application/xml, text/xml, */*',
-      },
-    });
-
-    const text = await res.text();
-
-    console.log(`status=${res.status}, length=${text.length}`);
-
-    if (!res.ok || !text.includes('<rss')) {
-      console.log('RSS取得失敗 or RSSではありません');
-      console.log(text.slice(0, 300));
-      continue;
-    }
-
-    const items = parseItems(text);
-
-    console.log(`items=${items.length}`);
-
-    for (const item of items) {
-      const combinedText = `${item.title}\n${item.description}`;
-
-      const matched = KEYWORDS.some(keyword => combinedText.includes(keyword));
-      if (!matched) continue;
-
-      console.log(`Matched: ${item.title}`);
-
-      const payload = {
-        source: 'nitter-rss',
-        account: target.account,
-        title: item.title,
-        link: item.link,
-        pubDate: item.pubDate,
-        description: item.description,
-      };
-
-      const postRes = await fetch(GAS_WEB_APP_URL, {
-        method: 'POST',
+    try {
+      const res = await fetch(url, {
         headers: {
-          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/rss+xml, application/xml, text/xml, text/html, */*',
         },
-        body: JSON.stringify(payload),
       });
 
-      const postText = await postRes.text();
+      const text = await res.text();
 
-      console.log(`POST to GAS: ${postRes.status}`);
-      console.log(postText);
+      console.log(`status=${res.status}`);
+      console.log(`length=${text.length}`);
+      console.log(`head=${text.slice(0, 500)}`);
+
+      if (res.ok && text.includes('<rss') && text.includes('<item>')) {
+        console.log('✅ 使えそう');
+      } else {
+        console.log('❌ 厳しそう');
+      }
+    } catch (e) {
+      console.log(`ERROR: ${e.message}`);
     }
   }
-}
-
-function parseItems(xml) {
-  const itemBlocks = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].map(m => m[1]);
-
-  return itemBlocks.map(block => ({
-    title: decodeXml(getTag(block, 'title')),
-    link: decodeXml(getTag(block, 'link')),
-    pubDate: decodeXml(getTag(block, 'pubDate')),
-    description: decodeXml(getTag(block, 'description')),
-  }));
-}
-
-function getTag(block, tagName) {
-  const match = block.match(new RegExp(`<${tagName}[^>]*>([\\s\\S]*?)<\\/${tagName}>`));
-  if (!match) return '';
-  return match[1].replace(/^<!\[CDATA\[/, '').replace(/\]\]>$/, '').trim();
-}
-
-function decodeXml(text) {
-  return text
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
 }
 
 main().catch(error => {
