@@ -26,4 +26,6 @@ jobs:
         run: npx playwright install chromium --with-deps
 
       - name: Check X page
+        env:
+          GAS_WEB_APP_URL: ${{ secrets.GAS_WEB_APP_URL }}
         run: npm run check:x
