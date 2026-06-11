@@ -1,0 +1,11 @@
+{
+  "name": "x-post-calendar-bot",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "check:x": "node check-x.js"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}
