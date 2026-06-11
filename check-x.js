@@ -105,30 +105,32 @@ async function main() {
         console.log(aiText.slice(0, 2000));
 
         const ai = await analyzePostWithAI({
-            account: target.account,
-            postUrl: postUrl || target.url,
-            text: aiText,
-            matchedKeywords,
-        });
+  account: target.account,
+  postUrl: postUrl || target.url,
+  text: aiText,
+  matchedKeywords,
+});
 
-      console.log('--- AI result ---');
-      console.log(JSON.stringify(ai, null, 2));
+const fixedAi = fixAiByPeriodText(ai, aiText);
 
-      if (!ai.should_create) {
-        console.log('AI judged: skip');
-        continue;
-      }
+console.log('--- AI result ---');
+console.log(JSON.stringify(fixedAi, null, 2));
 
-      const payload = {
-        source: 'x-playwright-ai',
-        account: target.account,
-        title: ai.calendar_title || makeTitle(text),
-        link: postUrl || target.url,
-        pubDate: new Date().toISOString(),
-        description: aiText,
-        matchedKeywords,
-        ai,
-      };
+if (!fixedAi.should_create) {
+  console.log('AI judged: skip');
+  continue;
+}
+
+const payload = {
+  source: 'x-playwright-ai',
+  account: target.account,
+  title: fixedAi.calendar_title || makeTitle(text),
+  link: postUrl || target.url,
+  pubDate: new Date().toISOString(),
+  description: aiText,
+  matchedKeywords,
+  ai: fixedAi,
+};
 
       const postRes = await fetch(GAS_WEB_APP_URL, {
         method: 'POST',
@@ -183,13 +185,18 @@ async function analyzePostWithAI({ account, postUrl, text, matchedKeywords }) {
             text,
             '',
             '判断ルール:',
-            '- 申込期限、受付期限、応募締切、販売終了、抽選締切が明確なら date_type は deadline。',
-            '- 受付開始、先行開始、販売開始、スタートが明確なら date_type は application_start。',
-            '- サイン会、チェキ会、撮影会、お渡し会、特典会などの開催日時しか分からない場合は date_type は event_date ではなく manual_check を優先してよい。',
-            '- 公演日やツアー初日だけを、申込期限として扱ってはいけません。',
-            '- 締切日が本文に見えないが申込/受付開始だけ分かる場合は、calendar_date は開始日、needs_manual_check は true。',
-            '- 日付が本文から判断できない場合は、calendar_date は今日の日付、date_type は manual_check、needs_manual_check は true。',
-            '- PinnedやShow moreなどのUI文字は無視してください。',
+'- 申込期限、受付期限、応募締切、販売終了、抽選締切が明確なら date_type は deadline。',
+'- 「受付期間」「応募期間」「申込期間」「販売期間」が A〜B の形で書かれている場合、calendar_date は必ず終了日Bにしてください。',
+'- 受付期間の終了日が分かる場合、date_type は必ず deadline にしてください。',
+'- 受付開始日と受付終了日が両方ある場合、開始日ではなく終了日を優先してください。',
+'- 例: 「受付期間：6/6(土)18:00〜6/15(月)23:59」なら calendar_date は 2026-06-15、date_type は deadline。',
+'- 締切・受付終了・期間終了が明確な場合、needs_manual_check は false にしてください。',
+'- 受付開始、先行開始、販売開始、スタートが明確なら date_type は application_start。ただし受付期間の終了日がある場合は deadline を優先。',
+'- サイン会、チェキ会、撮影会、お渡し会、特典会などの開催日時しか分からない場合は date_type は event_date ではなく manual_check を優先してよい。',
+'- 公演日やツアー初日だけを、申込期限として扱ってはいけません。',
+'- 締切日が本文に見えないが申込/受付開始だけ分かる場合は、calendar_date は開始日、needs_manual_check は true。',
+'- 日付が本文から判断できない場合は、calendar_date は今日の日付、date_type は manual_check、needs_manual_check は true。',
+'- PinnedやShow moreなどのUI文字は無視してください。',
           ].join('\n'),
         },
       ],
@@ -361,4 +368,49 @@ async function fetchFullPostText(browser, postUrl) {
   } finally {
     await page.close();
   }
+}
+
+function fixAiByPeriodText(ai, text) {
+  const fixed = { ...ai };
+
+  const periodMatch = text.match(
+    /(受付期間|応募期間|申込期間|販売期間)[：:\s]*.*?(\d{1,2})[\/月](\d{1,2})日?.*?[〜~～\-ー].*?(\d{1,2})[\/月](\d{1,2})日?/s
+  );
+
+  if (!periodMatch) {
+    return fixed;
+  }
+
+  const endMonth = Number(periodMatch[4]);
+  const endDay = Number(periodMatch[5]);
+
+  const todayJst = new Date(
+    new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' })
+  );
+
+  let year = todayJst.getFullYear();
+  const candidate = new Date(year, endMonth - 1, endDay);
+
+  const oneMonthAgo = new Date(todayJst);
+  oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+
+  if (candidate < oneMonthAgo) {
+    year += 1;
+  }
+
+  const yyyy = String(year);
+  const mm = String(endMonth).padStart(2, '0');
+  const dd = String(endDay).padStart(2, '0');
+
+  fixed.calendar_date = `${yyyy}-${mm}-${dd}`;
+  fixed.date_type = 'deadline';
+  fixed.needs_manual_check = false;
+
+  if (!fixed.calendar_title.includes('期限') && !fixed.calendar_title.includes('締切')) {
+    fixed.calendar_title = `${fixed.calendar_title} 受付期限`;
+  }
+
+  fixed.reason = `${periodMatch[1]}の終了日が明記されているため。`;
+
+  return fixed;
 }
