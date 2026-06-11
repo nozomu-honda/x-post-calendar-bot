@@ -93,12 +93,23 @@ async function main() {
       console.log(`link: ${postUrl || target.url}`);
       console.log(text.slice(0, 1200));
 
-      const ai = await analyzePostWithAI({
-        account: target.account,
-        postUrl: postUrl || target.url,
-        text,
-        matchedKeywords,
-      });
+      const fullText = postUrl
+        ? await fetchFullPostText(browser, postUrl)
+  : '';
+
+        const aiText = fullText && fullText.length > text.length
+        ? fullText
+        : text;
+
+        console.log('--- full post text used for AI ---');
+        console.log(aiText.slice(0, 2000));
+
+        const ai = await analyzePostWithAI({
+            account: target.account,
+            postUrl: postUrl || target.url,
+            text: aiText,
+            matchedKeywords,
+        });
 
       console.log('--- AI result ---');
       console.log(JSON.stringify(ai, null, 2));
@@ -114,7 +125,7 @@ async function main() {
         title: ai.calendar_title || makeTitle(text),
         link: postUrl || target.url,
         pubDate: new Date().toISOString(),
-        description: text,
+        description: aiText,
         matchedKeywords,
         ai,
       };
@@ -314,3 +325,40 @@ main().catch(error => {
   console.error(error);
   process.exit(1);
 });
+
+async function fetchFullPostText(browser, postUrl) {
+  if (!postUrl) return '';
+
+  const page = await browser.newPage({
+    viewport: {
+      width: 1280,
+      height: 1000,
+    },
+    userAgent:
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  });
+
+  try {
+    await page.goto(postUrl, {
+      waitUntil: 'domcontentloaded',
+      timeout: 60000,
+    });
+
+    await page.waitForTimeout(6000);
+
+    const articles = await page.locator('article').all();
+
+    if (articles.length === 0) {
+      const bodyText = await page.locator('body').innerText().catch(() => '');
+      return bodyText;
+    }
+
+    const text = await articles[0].innerText().catch(() => '');
+    return text;
+  } catch (e) {
+    console.log(`fetchFullPostText error: ${e.message}`);
+    return '';
+  } finally {
+    await page.close();
+  }
+}
