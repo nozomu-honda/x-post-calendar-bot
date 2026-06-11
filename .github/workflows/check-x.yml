@@ -28,4 +28,5 @@ jobs:
       - name: Check X page
         env:
           GAS_WEB_APP_URL: ${{ secrets.GAS_WEB_APP_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: npm run check:x
