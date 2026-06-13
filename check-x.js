@@ -74,28 +74,47 @@ async function main() {
     const title = await page.title();
     console.log(`Page title: ${title}`);
 
-    const articles = await page.locator('article').all();
-    console.log(`article count: ${articles.length}`);
+    await scrollProfile(page);
 
-    for (let i = 0; i < Math.min(articles.length, 10); i++) {
+    const articles = await page.locator('article').all();
+    console.log(`article count after scroll: ${articles.length}`);
+
+    const seenPostUrls = new Set();
+
+    for (let i = 0; i < Math.min(articles.length, 30); i++) {
       const article = articles[i];
 
       const listText = await article.innerText().catch(() => '');
       if (!listText) continue;
 
-      const matchedKeywords = KEYWORDS.filter(keyword => listText.includes(keyword));
-      if (matchedKeywords.length === 0) continue;
+      if (listText.includes('Pinned')) {
+        console.log('skip pinned post');
+        continue;
+      }
 
       const postUrl = await extractPostUrl(article);
 
+      if (!postUrl) {
+        console.log('skip no post url');
+        continue;
+      }
+
+      if (seenPostUrls.has(postUrl)) {
+        console.log(`skip duplicated in page: ${postUrl}`);
+        continue;
+      }
+
+      seenPostUrls.add(postUrl);
+
+      const matchedKeywords = KEYWORDS.filter(keyword => listText.includes(keyword));
+      if (matchedKeywords.length === 0) continue;
+
       console.log('--- keyword matched post ---');
       console.log(`keywords: ${matchedKeywords.join(', ')}`);
-      console.log(`link: ${postUrl || target.url}`);
+      console.log(`link: ${postUrl}`);
       console.log(listText.slice(0, 1200));
 
-      const fullText = postUrl
-        ? await fetchFullPostText(browser, postUrl)
-        : '';
+      const fullText = await fetchFullPostText(browser, postUrl);
 
       const aiText = fullText && fullText.length > listText.length
         ? fullText
@@ -106,7 +125,7 @@ async function main() {
 
       const ai = await analyzePostWithAI({
         account: target.account,
-        postUrl: postUrl || target.url,
+        postUrl,
         text: aiText,
         matchedKeywords,
       });
@@ -125,7 +144,7 @@ async function main() {
         source: 'x-playwright-ai',
         account: target.account,
         title: fixedAi.calendar_title || makeTitle(listText),
-        link: postUrl || target.url,
+        link: postUrl,
         pubDate: new Date().toISOString(),
         description: aiText,
         matchedKeywords,
@@ -148,6 +167,13 @@ async function main() {
   }
 
   await browser.close();
+}
+
+async function scrollProfile(page) {
+  for (let i = 0; i < 4; i++) {
+    await page.mouse.wheel(0, 1400);
+    await page.waitForTimeout(2500);
+  }
 }
 
 async function fetchFullPostText(browser, postUrl) {
